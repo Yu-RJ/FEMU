@@ -13,12 +13,12 @@ static inline bool should_gc_high(struct ssd *ssd)
 {
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines_high);
 }
-
+// 映射有关
 static inline struct ppa get_maptbl_ent(struct ssd *ssd, uint64_t lpn)
 {
     return ssd->maptbl[lpn];
 }
-
+// 映射有关
 static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
 {
     ftl_assert(lpn < ssd->sp.tt_pgs);
@@ -87,7 +87,8 @@ static void ssd_init_lines(struct ssd *ssd)
     struct line_mgmt *lm = &ssd->lm;
     struct line *line;
 
-    lm->tt_lines = spp->blks_per_pl;
+    lm->tt_lines = spp->blks_per_pl; // line数 = 每个plane的block数 
+    // 非多平面时参见ssd_init_params函数内：tt_lines = blks_per_lun; /* TODO: to fix under multiplanes */
     ftl_assert(lm->tt_lines == spp->tt_lines);
     lm->lines = g_malloc0(sizeof(struct line) * lm->tt_lines);
 
@@ -240,7 +241,7 @@ static void ssd_init_params(struct ssdparams *spp)
     spp->secs_per_pg = 8;
     spp->pgs_per_blk = 256;
     spp->blks_per_pl = 256; /* 16GB */
-    spp->pls_per_lun = 1;
+    spp->pls_per_lun = 1;// 目前不是multiplanes
     spp->luns_per_ch = 8;
     spp->nchs = 8;
 
@@ -343,7 +344,7 @@ static void ssd_init_ch(struct ssd_channel *ch, struct ssdparams *spp)
 static void ssd_init_maptbl(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
-
+    // 开辟内存区存放映射表，初始化每个page的物理地址为0
     ssd->maptbl = g_malloc0(sizeof(struct ppa) * spp->tt_pgs);
     for (int i = 0; i < spp->tt_pgs; i++) {
         ssd->maptbl[i].ppa = UNMAPPED_PPA;

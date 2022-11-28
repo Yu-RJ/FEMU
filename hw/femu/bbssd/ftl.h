@@ -3,18 +3,18 @@
 
 #include "../nvme.h"
 
-#define INVALID_PPA     (~(0ULL))
-#define INVALID_LPN     (~(0ULL))
-#define UNMAPPED_PPA    (~(0ULL))
+#define INVALID_PPA     (~(0ULL))  // PPA:  Physical Page Address
+#define INVALID_LPN     (~(0ULL))  // LPN:  logical page number 逻辑页号
+#define UNMAPPED_PPA    (~(0ULL))  // 0ULL: unsigned long long 类型的0
 
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
     NAND_ERASE = 2,
 
-    NAND_READ_LATENCY = 40000,
-    NAND_PROG_LATENCY = 200000,
-    NAND_ERASE_LATENCY = 2000000,
+    NAND_READ_LATENCY = 40000,  // 读延迟
+    NAND_PROG_LATENCY = 200000, // 赋给 -> 写延迟
+    NAND_ERASE_LATENCY = 2000000, // 擦除延迟
 };
 
 enum {
@@ -53,16 +53,16 @@ enum {
 #define CH_BITS     (7)
 
 /* describe a physical page addr */
-struct ppa {
+struct ppa {//↖     ↗   ↗  
     union {
         struct {
-            uint64_t blk : BLK_BITS;
-            uint64_t pg  : PG_BITS;
-            uint64_t sec : SEC_BITS;
-            uint64_t pl  : PL_BITS;
-            uint64_t lun : LUN_BITS;
-            uint64_t ch  : CH_BITS;
-            uint64_t rsv : 1;
+            uint64_t blk : BLK_BITS;    //block
+            uint64_t pg  : PG_BITS;     //page
+            uint64_t sec : SEC_BITS;    //sector (ECC的最小单元)
+            uint64_t pl  : PL_BITS;     //plane
+            uint64_t lun : LUN_BITS;    //lun
+            uint64_t ch  : CH_BITS;     //channel
+            uint64_t rsv : 1;           //?
         } g;
 
         uint64_t ppa;
@@ -166,7 +166,7 @@ typedef struct line {
 } line;
 
 /* wp: record next write addr */
-struct write_pointer {
+struct write_pointer {// 写指针有啥用？\???
     struct line *curline;
     int ch;
     int lun;
@@ -175,11 +175,11 @@ struct write_pointer {
     int pl;
 };
 
-struct line_mgmt {
+struct line_mgmt {  // line management \???
     struct line *lines;
     /* free line list, we only need to maintain a list of blk numbers */
     QTAILQ_HEAD(free_line_list, line) free_line_list;
-    pqueue_t *victim_line_pq;
+    pqueue_t *victim_line_pq; // 猜测垃圾回收采用优先队列？\???
     //QTAILQ_HEAD(victim_line_list, line) victim_line_list;
     QTAILQ_HEAD(full_line_list, line) full_line_list;
     int tt_lines;
@@ -198,7 +198,9 @@ struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
-    struct ppa *maptbl; /* page level mapping table */
+    // Physical Page Address I/O接口
+    struct ppa *maptbl; /* page level mapping table */ 
+    // 映射表的位置？\???
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
