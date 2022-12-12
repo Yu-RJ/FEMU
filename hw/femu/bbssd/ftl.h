@@ -127,7 +127,7 @@ struct ssdparams {
     int gc_thres_lines;
     double gc_thres_pcent_high;
     int gc_thres_lines_high;
-    bool enable_gc_delay;
+    bool enable_gc_delay;//enable FEMU GC Delay Emulation? 
 
     /* below are all calculated values */
     int secs_per_blk; /* # of sectors per block */
@@ -166,7 +166,7 @@ typedef struct line {
 } line;
 
 /* wp: record next write addr */
-struct write_pointer {// 写指针有啥用？\???
+struct write_pointer {
     struct line *curline;
     int ch;
     int lun;
@@ -175,7 +175,7 @@ struct write_pointer {// 写指针有啥用？\???
     int pl;
 };
 
-struct line_mgmt {  // line management \???
+struct line_mgmt {  // line management
     struct line *lines;
     /* free line list, we only need to maintain a list of blk numbers */
     QTAILQ_HEAD(free_line_list, line) free_line_list;
@@ -206,8 +206,9 @@ struct ssd {
     struct line_mgmt lm;
 
     /* lockless ring for communication with NVMe IO thread */
-    struct rte_ring **to_ftl;
-    struct rte_ring **to_poller;
+    // rte_ring 无锁环形队列, 生产者、消费者同时出入队列, 用于多进程/线程之间的通信
+    struct rte_ring **to_ftl;    // 从此处取命令被ftl执行
+    struct rte_ring **to_poller; // ftl处理的命令放入此处,到时间等轮询器取出
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
 };

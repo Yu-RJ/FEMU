@@ -1,32 +1,27 @@
 #include "ftl.h"
 
-//#define FEMU_DEBUG_FTL
+//#define FEMU_DEBUG_FTL //决定是否输出ftl_debug等调试信息
 
 static void *ftl_thread(void *arg);
 
-static inline bool should_gc(struct ssd *ssd)
-{
+static inline bool should_gc(struct ssd *ssd){
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines);
 }
 
-static inline bool should_gc_high(struct ssd *ssd)
-{
+static inline bool should_gc_high(struct ssd *ssd){ // \\???
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines_high);
 }
-// 映射有关
-static inline struct ppa get_maptbl_ent(struct ssd *ssd, uint64_t lpn)
-{
+// 获取 lpn 对应的 ppa （映射）
+static inline struct ppa get_maptbl_ent(struct ssd *ssd, uint64_t lpn){
     return ssd->maptbl[lpn];
 }
-// 映射有关
-static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
-{
+// 设置 maptbl中 lpn 到 ppa 的映射
+static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa){
     ftl_assert(lpn < ssd->sp.tt_pgs);
     ssd->maptbl[lpn] = *ppa;
 }
-
-static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
-{
+// 地址解析：ppa —> 页序号
+static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa){
     struct ssdparams *spp = &ssd->sp;
     uint64_t pgidx;
 
@@ -40,44 +35,35 @@ static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
 
     return pgidx;
 }
-
-static inline uint64_t get_rmap_ent(struct ssd *ssd, struct ppa *ppa)
-{
+//由 ppa得 lpa (由 rmap表)
+static inline uint64_t get_rmap_ent(struct ssd *ssd, struct ppa *ppa){
     uint64_t pgidx = ppa2pgidx(ssd, ppa);
-
     return ssd->rmap[pgidx];
 }
 
-/* set rmap[page_no(ppa)] -> lpn */
-static inline void set_rmap_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
-{
+// set:rmap[page_no(ppa)] -> lpn ————设置 rmap中 ppa 到 lpn 的映射
+static inline void set_rmap_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa){
     uint64_t pgidx = ppa2pgidx(ssd, ppa);
-
     ssd->rmap[pgidx] = lpn;
 }
-
-static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr)
-{
+// return (next > curr);
+static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr){
     return (next > curr);
 }
-
-static inline pqueue_pri_t victim_line_get_pri(void *a)
-{
+// pri == line.vpc
+static inline pqueue_pri_t victim_line_get_pri(void *a){
     return ((struct line *)a)->vpc;
 }
 
-static inline void victim_line_set_pri(void *a, pqueue_pri_t pri)
-{
+static inline void victim_line_set_pri(void *a, pqueue_pri_t pri){
     ((struct line *)a)->vpc = pri;
 }
 
-static inline size_t victim_line_get_pos(void *a)
-{
+static inline size_t victim_line_get_pos(void *a){
     return ((struct line *)a)->pos;
 }
 
-static inline void victim_line_set_pos(void *a, size_t pos)
-{
+static inline void victim_line_set_pos(void *a, size_t pos){
     ((struct line *)a)->pos = pos;
 }
 
@@ -133,9 +119,8 @@ static void ssd_init_write_pointer(struct ssd *ssd)
     wpp->blk = 0;
     wpp->pl = 0;
 }
-
-static inline void check_addr(int a, int max)
-{
+// ftl_assert(a >= 0 && a < max);
+static inline void check_addr(int a, int max){
     ftl_assert(a >= 0 && a < max);
 }
 
@@ -155,6 +140,14 @@ static struct line *get_next_free_line(struct ssd *ssd)
     return curline;
 }
 
+/* 更新写指针，SSD内部处理，没有时延
+规则:移到下一chanel同位置处，
+————若超出chanel范围，则跳回0号chanel，移到下一lun同位置处，
+——————若超出lun范围，则跳回0号lun，移到下一个page，
+————————若超出page范围，则跳回0号page，此时该line已经全部写完
+——————————若该 line的 page全 valid，则该line加入 full_line_list
+——————————若该 line的 page有 invalid，则该line加入 victim_line_list
+——————————找个 free_line赋给 write_pointer，完成更新 */
 static void ssd_advance_write_pointer(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -163,32 +156,31 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
 
     check_addr(wpp->ch, spp->nchs);
     wpp->ch++;
-    if (wpp->ch == spp->nchs) {
+    if (wpp->ch == spp->nchs) {//到最后一个chanel要跳回第一个
         wpp->ch = 0;
         check_addr(wpp->lun, spp->luns_per_ch);
-        wpp->lun++;
-        /* in this case, we should go to next lun */
-        if (wpp->lun == spp->luns_per_ch) {
+        wpp->lun++; //go to next lun 
+        if (wpp->lun == spp->luns_per_ch) {//到最后一个lun要跳回第一个
             wpp->lun = 0;
-            /* go to next page in the block */
             check_addr(wpp->pg, spp->pgs_per_blk);
-            wpp->pg++;
-            if (wpp->pg == spp->pgs_per_blk) {
+            wpp->pg++; //go to next page
+            if (wpp->pg == spp->pgs_per_blk) {//到最后一个page要跳回第一个
                 wpp->pg = 0;
-                /* move current line to {victim,full} line list */
+                // move current line to {victim,full} line list
+                // meanwhile,以下也确保了被 gc的 line内的 page都是写过的
                 if (wpp->curline->vpc == spp->pgs_per_line) {
-                    /* all pgs are still valid, move to full line list */
+                    //该 line下所有 page都是valid,将该line移入 full line list
                     ftl_assert(wpp->curline->ipc == 0);
                     QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
                     lm->full_line_cnt++;
-                } else {
+                } else {//该 line下有 invalid的 page
                     ftl_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
-                    /* there must be some invalid pages in this line */
                     ftl_assert(wpp->curline->ipc > 0);
                     pqueue_insert(lm->victim_line_pq, wpp->curline);
                     lm->victim_line_cnt++;
                 }
                 /* current line is used up, pick another empty line */
+                // 牢记block_id = line_id，故此时意味着一个line内所有空间已被顺序写完
                 check_addr(wpp->blk, spp->blks_per_pl);
                 wpp->curline = NULL;
                 wpp->curline = get_next_free_line(ssd);
@@ -209,6 +201,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
     }
 }
 
+// 获取一个可 write的页的地址
 static struct ppa get_new_page(struct ssd *ssd)
 {
     struct write_pointer *wpp = &ssd->wp;
@@ -391,7 +384,7 @@ void ssd_init(FemuCtrl *n)
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
 }
-
+// 检查ppa是否合法（是否越界）
 static inline bool valid_ppa(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -409,51 +402,43 @@ static inline bool valid_ppa(struct ssd *ssd, struct ppa *ppa)
 
     return false;
 }
-
-static inline bool valid_lpn(struct ssd *ssd, uint64_t lpn)
-{
+// 检查lpn是否越界（超出总lpn范围）
+static inline bool valid_lpn(struct ssd *ssd, uint64_t lpn){
     return (lpn < ssd->sp.tt_pgs);
 }
-
-static inline bool mapped_ppa(struct ppa *ppa)
-{
+// return：该ppa 是否 被 映射过
+static inline bool mapped_ppa(struct ppa *ppa){
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
-static inline struct ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa)
-{
+static inline struct ssd_channel *get_ch(struct ssd *ssd, struct ppa *ppa){
     return &(ssd->ch[ppa->g.ch]);
 }
 
-static inline struct nand_lun *get_lun(struct ssd *ssd, struct ppa *ppa)
-{
+static inline struct nand_lun *get_lun(struct ssd *ssd, struct ppa *ppa){
     struct ssd_channel *ch = get_ch(ssd, ppa);
     return &(ch->lun[ppa->g.lun]);
 }
 
-static inline struct nand_plane *get_pl(struct ssd *ssd, struct ppa *ppa)
-{
+static inline struct nand_plane *get_pl(struct ssd *ssd, struct ppa *ppa){
     struct nand_lun *lun = get_lun(ssd, ppa);
     return &(lun->pl[ppa->g.pl]);
 }
 
-static inline struct nand_block *get_blk(struct ssd *ssd, struct ppa *ppa)
-{
+static inline struct nand_block *get_blk(struct ssd *ssd, struct ppa *ppa){
     struct nand_plane *pl = get_pl(ssd, ppa);
     return &(pl->blk[ppa->g.blk]);
 }
 
-static inline struct line *get_line(struct ssd *ssd, struct ppa *ppa)
-{
+static inline struct line *get_line(struct ssd *ssd, struct ppa *ppa){
     return &(ssd->lm.lines[ppa->g.blk]);
 }
-
-static inline struct nand_page *get_pg(struct ssd *ssd, struct ppa *ppa)
-{
-    struct nand_block *blk = get_blk(ssd, ppa);
+//获取page地址
+static inline struct nand_page *get_pg(struct ssd *ssd, struct ppa *ppa){
+    struct nand_block *blk = get_blk(ssd, ppa);//向上逐层找到最高目录，再往下解析
     return &(blk->pg[ppa->g.pg]);
 }
-
+// 各操作延迟模拟的核心函数 并 更新有关部件的 avail_time
 static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
         nand_cmd *ncmd)
 {
@@ -462,7 +447,7 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
         qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : ncmd->stime;
     uint64_t nand_stime;
     struct ssdparams *spp = &ssd->sp;
-    struct nand_lun *lun = get_lun(ssd, ppa);
+    struct nand_lun *lun = get_lun(ssd, ppa);//获取有关lun的物理地址
     uint64_t lat = 0;
 
     switch (c) {
@@ -525,7 +510,9 @@ static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
     return lat;
 }
 
-/* update SSD status about one page from PG_VALID -> PG_VALID */
+/* update SSD status about one page from PG_VALID -> PG_VALID 
+并更新对应 block和 line的 ipc、vpc,
+同时更新 line的状态（是否是full_line）、victim_line_list的排序状态等*/
 static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
 {
     struct line_mgmt *lm = &ssd->lm;
@@ -557,22 +544,22 @@ static void mark_page_invalid(struct ssd *ssd, struct ppa *ppa)
     line->ipc++;
     ftl_assert(line->vpc > 0 && line->vpc <= spp->pgs_per_line);
     /* Adjust the position of the victime line in the pq under over-writes */
-    if (line->pos) {
+    if (line->pos) { //pos初始化时为0 \\???
         /* Note that line->vpc will be updated by this call */
+        // 猜测将该 line在 victim_line队列里的优先级改为 vpc-1
         pqueue_change_priority(lm->victim_line_pq, line->vpc - 1, line);
     } else {
         line->vpc--;
     }
 
-    if (was_full_line) {
-        /* move line: "full" -> "victim" */
+    if (was_full_line) {// move line: "full" -> "victim" 
         QTAILQ_REMOVE(&lm->full_line_list, line, entry);
         lm->full_line_cnt--;
         pqueue_insert(lm->victim_line_pq, line);
         lm->victim_line_cnt++;
     }
 }
-
+// page置有效, block和 line的有效 page数 ++
 static void mark_page_valid(struct ssd *ssd, struct ppa *ppa)
 {
     struct nand_block *blk = NULL;
@@ -594,7 +581,7 @@ static void mark_page_valid(struct ssd *ssd, struct ppa *ppa)
     ftl_assert(line->vpc >= 0 && line->vpc < ssd->sp.pgs_per_line);
     line->vpc++;
 }
-
+//本 block下所有 page置为 free，擦除次数统计++
 static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -615,9 +602,10 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
     blk->erase_cnt++;
 }
 
+/* advance ssd status, we don't care about how long it takes */
+//gc读在时间模拟上 == 一次普通读操作
 static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
 {
-    /* advance ssd status, we don't care about how long it takes */
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcr;
         gcr.type = GC_IO;
@@ -627,12 +615,12 @@ static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
     }
 }
 
-/* move valid page data (already in DRAM) from victim line to a new page */
+// move valid page data (already in DRAM) from victim line to a new page
 static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 {
     struct ppa new_ppa;
     struct nand_lun *new_lun;
-    uint64_t lpn = get_rmap_ent(ssd, old_ppa);
+    uint64_t lpn = get_rmap_ent(ssd, old_ppa); //欲删除的物理page对应逻辑页号
 
     ftl_assert(valid_lpn(ssd, lpn));
     new_ppa = get_new_page(ssd);
@@ -640,7 +628,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
     set_rmap_ent(ssd, lpn, &new_ppa);
-
+    // 写完page立即置为有效
     mark_page_valid(ssd, &new_ppa);
 
     /* need to advance the write pointer here */
@@ -662,6 +650,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 
     new_lun = get_lun(ssd, &new_ppa);
     new_lun->gc_endtime = new_lun->next_lun_avail_time;
+    //注意：ssd_advance_status 中更新了next_lun_avail_time
 
     return 0;
 }
@@ -670,12 +659,12 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
 {
     struct line_mgmt *lm = &ssd->lm;
     struct line *victim_line = NULL;
-
+    // victim_line获取按给定gc算法选择的line
     victim_line = pqueue_peek(lm->victim_line_pq);
-    if (!victim_line) {
+    if (!victim_line) { //没有 line在队列里
         return NULL;
     }
-
+    // 非强制gc 且 垃圾page小于总page的1/8 —> 不清理
     if (!force && victim_line->ipc < ssd->sp.pgs_per_line / 8) {
         return NULL;
     }
@@ -689,6 +678,7 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
 }
 
 /* here ppa identifies the block we want to clean */
+//清理一个block下所有page
 static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -698,12 +688,12 @@ static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
         ppa->g.pg = pg;
         pg_iter = get_pg(ssd, ppa);
-        /* there shouldn't be any free page in victim blocks */
+        // there shouldn't be any free page in victim blocks
         ftl_assert(pg_iter->status != PG_FREE);
-        if (pg_iter->status == PG_VALID) {
-            gc_read_page(ssd, ppa);
+        if (pg_iter->status == PG_VALID) { //valid的page才需要迁移，有读写延迟
+            gc_read_page(ssd, ppa);     // 读 latency
             /* delay the maptbl update until "write" happens */
-            gc_write_page(ssd, ppa);
+            gc_write_page(ssd, ppa);    // 写 latency
             cnt++;
         }
     }
@@ -731,11 +721,11 @@ static int do_gc(struct ssd *ssd, bool force)
     int ch, lun;
 
     victim_line = select_victim_line(ssd, force);
-    if (!victim_line) {
+    if (!victim_line) {//此时没有可以gc的line
         return -1;
     }
 
-    ppa.g.blk = victim_line->id;
+    ppa.g.blk = victim_line->id;//id == 相应的block id
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
               ssd->lm.free_line_cnt);
@@ -747,10 +737,10 @@ static int do_gc(struct ssd *ssd, bool force)
             ppa.g.lun = lun;
             ppa.g.pl = 0;
             lunp = get_lun(ssd, &ppa);
-            clean_one_block(ssd, &ppa);
-            mark_block_free(ssd, &ppa);
+            clean_one_block(ssd, &ppa);//包含gc某个 block的 “读写延迟”计算等
+            mark_block_free(ssd, &ppa);//被clean的 block置为 free
 
-            if (spp->enable_gc_delay) {
+            if (spp->enable_gc_delay) {//如果gc也加入时延模拟，增加擦除延迟
                 struct nand_cmd gce;
                 gce.type = GC_IO;
                 gce.cmd = NAND_ERASE;
@@ -767,17 +757,18 @@ static int do_gc(struct ssd *ssd, bool force)
 
     return 0;
 }
-
+//计算“读请求”的每个page的延迟; 返回有关统计; 更新延迟有关计时;
+//未发现返回读取结果\\???
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
     struct ssdparams *spp = &ssd->sp;
-    uint64_t lba = req->slba;
+    uint64_t lba = req->slba;   //Logical Block Address
     int nsecs = req->nlb;
     struct ppa ppa;
-    uint64_t start_lpn = lba / spp->secs_per_pg;
-    uint64_t end_lpn = (lba + nsecs - 1) / spp->secs_per_pg;
+    uint64_t start_lpn = lba / spp->secs_per_pg; //起始逻辑页号
+    uint64_t end_lpn = (lba + nsecs - 1) / spp->secs_per_pg; //结束逻辑页号
     uint64_t lpn;
-    uint64_t sublat, maxlat = 0;
+    uint64_t sublat, maxlat = 0; //延迟时间
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -798,7 +789,7 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         srd.cmd = NAND_READ;
         srd.stime = req->stime;
         sublat = ssd_advance_status(ssd, &ppa, &srd);
-        maxlat = (sublat > maxlat) ? sublat : maxlat;
+        maxlat = (sublat > maxlat) ? sublat : maxlat; //选出最长延迟
     }
 
     return maxlat;
@@ -829,23 +820,18 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
-        if (mapped_ppa(&ppa)) {
-            /* update old page information first */
+        if (mapped_ppa(&ppa)) { //update old page information first
             mark_page_invalid(ssd, &ppa);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
 
-        /* new write */
-        ppa = get_new_page(ssd);
-        /* update maptbl */
-        set_maptbl_ent(ssd, lpn, &ppa);
-        /* update rmap */
-        set_rmap_ent(ssd, lpn, &ppa);
-
+        /* new write 
+        注意 get_new_page和 ssd_advance_write_pointer成对出现 */
+        ppa = get_new_page(ssd); 
+        set_maptbl_ent(ssd, lpn, &ppa); //update maptbl
+        set_rmap_ent(ssd, lpn, &ppa);   //update rmap
         mark_page_valid(ssd, &ppa);
-
-        /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd);
+        ssd_advance_write_pointer(ssd); // advance write pointer here
 
         struct nand_cmd swr;
         swr.type = USER_IO;
@@ -868,13 +854,13 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
-    while (!*(ssd->dataplane_started_ptr)) {
+    while (!*(ssd->dataplane_started_ptr)) { //==FemuCtrl.dataplane_started
         usleep(100000);
     }
 
     /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
     ssd->to_ftl = n->to_ftl;
-    ssd->to_poller = n->to_poller;
+    ssd->to_poller = n->to_poller; //poller:轮询器
 
     while (1) {
         for (i = 1; i <= n->num_poller; i++) {
