@@ -503,7 +503,7 @@ typedef struct NvmeAerResult {
     uint8_t resv;
 } NvmeAerResult;
 
-typedef struct NvmeCqe {
+typedef struct NvmeCqe {// 完成队列 completion queue entry
     union {
         struct {
             uint32_t    result;
@@ -511,10 +511,10 @@ typedef struct NvmeCqe {
         } n;
         uint64_t res64;
     };
-    uint16_t    sq_head;
-    uint16_t    sq_id;
-    uint16_t    cid;
-    uint16_t    status;
+    uint16_t    sq_head;// 提交队列头指针sqhd
+    uint16_t    sq_id;  // 提交队列标识 sqid
+    uint16_t    cid;    // 正在完成的命令的标识cid
+    uint16_t    status; // 
 } NvmeCqe;
 
 enum NvmeStatusCodes {

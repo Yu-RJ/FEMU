@@ -69,7 +69,7 @@ static void bb_flip(FemuCtrl *n, NvmeCmd *cmd)
         printf("FEMU:%s,Not implemented flip cmd (%lu)\n", n->devname, cdw10);
     }
 }
-
+// 实际数据读写通过nvme_rw进行
 static uint16_t bb_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req)
 {

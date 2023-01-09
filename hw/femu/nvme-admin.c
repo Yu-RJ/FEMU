@@ -138,7 +138,7 @@ static uint16_t nvme_create_sq(FemuCtrl *n, NvmeCmd *cmd)
 
     return NVME_SUCCESS;
 }
-
+// 创建I/O完成队列（NvmeCqe？？）命令
 static uint16_t nvme_create_cq(FemuCtrl *n, NvmeCmd *cmd)
 {
     NvmeCQueue *cq;

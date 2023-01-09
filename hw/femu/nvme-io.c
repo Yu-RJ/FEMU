@@ -71,11 +71,11 @@ static void nvme_process_sq_io(void *opaque, int index_poller)
         if (n->print_log) {
             femu_debug("%s,cid:%d\n", __func__, cmd.cid);
         }
-
+        // 处理 IO请求，完成数据实际读写（在内存中）（通过调用nvme_rw）
         status = nvme_io_cmd(n, &cmd, req);
         if (1 && status == NVME_SUCCESS) {
             req->status = status;
-
+            // 处理 FTL 仿真，塞入环形队列
             int rc = femu_ring_enqueue(n->to_ftl[index_poller], (void *)&req, 1);
             if (rc != 1) {
                 femu_err("enqueue failed, ret=%d\n", rc);
@@ -188,7 +188,7 @@ static void nvme_process_cq_cpl(void *arg, int index_poller)
         break;
     }
 }
-
+//以环形队列管理请求
 static void *nvme_poller(void *arg)
 {
     FemuCtrl *n = ((NvmePollerThreadArgument *)arg)->n;
@@ -256,7 +256,7 @@ static void set_pos(void *a, size_t pos)
 {
     ((NvmeRequest *)a)->pos = pos;
 }
-
+// 创造IO轮询器，
 void nvme_create_poller(FemuCtrl *n)
 {
     n->should_isr = g_malloc0(sizeof(bool) * (n->num_io_queues + 1));
@@ -265,6 +265,7 @@ void nvme_create_poller(FemuCtrl *n)
     /* Coperd: we put NvmeRequest into these rings */
     n->to_ftl = malloc(sizeof(struct rte_ring *) * (n->num_poller + 1));
     for (int i = 1; i <= n->num_poller; i++) {
+        // 构造 "多生产者-单消费者" 的 rte_ring
         n->to_ftl[i] = femu_ring_create(FEMU_RING_TYPE_MP_SC, FEMU_MAX_INF_REQS);
         if (!n->to_ftl[i]) {
             femu_err("failed to create ring (n->to_ftl) ...\n");
